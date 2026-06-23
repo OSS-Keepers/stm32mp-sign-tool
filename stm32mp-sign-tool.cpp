@@ -23,7 +23,6 @@
 #include <fstream>
 #include <vector>
 #include <cstring>
-#include <getopt.h>
 #include <stdexcept>
 #include <cstdint>
 #include <iomanip>
@@ -36,6 +35,7 @@
 #include <openssl/ecdsa.h>
 #include <openssl/engine.h>
 
+#include "cli_options.hpp"
 #include "stm32mp15.hpp"
 
 static bool verbose = false;
@@ -468,72 +468,46 @@ int sign_stm32_image(std::vector<unsigned char>& image, const char* key_desc, co
 
 }
 
-void usage(const char* argv0) {
-    std::cout << "Usage: " << argv0 << " -k key_desc [-p passphrase/pin] [-v] [-i input_file] [-o output_file] [-h hash_file]" << std::endl;
-}
-
 int main(int argc, char* argv[]) {
-    const char* key_desc = nullptr;
-    const char* passphrase = nullptr;
-    const char* input_file = nullptr;
-    const char* output_file = nullptr;
-    const char* output_hash = nullptr;
-
-    int opt;
     if (argc == 1) {
         usage(argv[0]);
         return -1;
     }
 
-    while ((opt = getopt(argc, argv, "k:p:h:vi:o:")) != -1) {
-        switch (opt) {
-            case 'k':
-                key_desc = optarg;
-                break;
-            case 'p':
-                passphrase = optarg;
-                break;
-            case 'v':
-                verbose = true;
-                break;
-            case 'h':
-                output_hash = optarg;
-                break;
-            case 'i':
-                input_file = optarg;
-                break;
-            case 'o':
-                output_file = optarg;
-                break;
-            default:
-                usage(argv[0]);
-                return -1;
-        }
+    CliOptions options;
+    if (parse_cli_options(argc, argv, &options) != 0) {
+        usage(argv[0]);
+        return -1;
+    }
+    verbose = options.verbose;
+
+    if (reject_unimplemented_options(options) != 0) {
+        return -1;
     }
 
-    if (!key_desc) {
+    if (!options.key_desc && !options.no_keys) {
         std::cerr << "Must specify a key file or pkcs11 uri" << std::endl;
         return -1;
     }
 
-    if (input_file) {
-        std::ifstream image_file(input_file, std::ios::binary);
+    if (options.input_file) {
+        std::ifstream image_file(options.input_file, std::ios::binary);
         std::vector<unsigned char> image((std::istreambuf_iterator<char>(image_file)), std::istreambuf_iterator<char>());
         image_file.close();
 
-        if (sign_stm32_image(image, key_desc, passphrase) != 0) {
+        if (sign_stm32_image(image, options.key_desc, options.passphrase) != 0) {
             return -1;
         }
 
-        if (output_file) {
-            std::ofstream output(output_file, std::ios::binary);
+        if (options.output_file) {
+            std::ofstream output(options.output_file, std::ios::binary);
             output.write(reinterpret_cast<const char*>(image.data()), static_cast<std::streamsize>(image.size()));
             output.close();
         }
     }
 
-    if (output_hash) {
-        if (hash_pubkey(key_desc, passphrase, output_hash) != 0) {
+    if (options.output_hash) {
+        if (hash_pubkey(options.key_desc, options.passphrase, options.output_hash) != 0) {
             return -1;
         }
     }
@@ -544,13 +518,13 @@ int main(int argc, char* argv[]) {
     }
 
     // Securely erase the passphrase
-    if (passphrase) {
-        OPENSSL_cleanse(static_cast<void*>(const_cast<char*>(passphrase)), std::strlen(passphrase));
+    if (options.passphrase) {
+        OPENSSL_cleanse(static_cast<void*>(const_cast<char*>(options.passphrase)), std::strlen(options.passphrase));
     }
 
     // Securely erase the key_desc in case it's a pkcs11 uri with pin
-    if (key_desc) {
-        OPENSSL_cleanse(static_cast<void*>(const_cast<char*>(key_desc)), std::strlen(key_desc));
+    if (options.key_desc) {
+        OPENSSL_cleanse(static_cast<void*>(const_cast<char*>(options.key_desc)), std::strlen(options.key_desc));
     }
 
     return 0;

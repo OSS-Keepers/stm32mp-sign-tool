@@ -7,7 +7,7 @@ project(stm32mp-sign-tool)
 find_package(OpenSSL REQUIRED)
 
 # Add the executable
-add_executable(stm32mp-sign-tool stm32mp-sign-tool.cpp)
+add_executable(stm32mp-sign-tool stm32mp-sign-tool.cpp cli_options.cpp)
 
 # Link the libraries
 target_link_libraries(stm32mp-sign-tool ${OPENSSL_LIBRARIES})

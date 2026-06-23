@@ -55,6 +55,23 @@ sudo make install
 
 ## Usage
 
+### Currently Functional Options
+
+The tool currently supports signing STM32MP15x images and generating public key hashes with these options:
+
+| Option | Alias | Description |
+| --- | --- | --- |
+| `--private-key <path>` | `-prvk <path>`, `-k <path>` | Private key file path or PKCS#11 URI |
+| `--password <value>` | `-pwd <value>`, `-p <value>` | Private key password or PKCS#11 PIN |
+| `--binary-image <path>` | `--input <path>`, `-bin <path>`, `-in <path>`, `-i <path>` | Input STM32 image path |
+| `--output <path>` | `-o <path>` | Signed output image path |
+| `-h <path>` | | Write SHA-256 hash of the raw public key |
+| `-v` | | Verbose output |
+
+The following ST signing-tool options are recognized by the parser but are not implemented yet. Passing any of them returns an error:
+
+`--public-key`/`-pubk`, `--load-address`/`-la`, `--entry-point`/`-ep`, `--image-version`/`-iv`, `--algorithm`/`-a`, `--option-flags`/`-of`, `--silent`/`-s`, `--binary-type`/`-type`, `--enc-dc`/`-encdc`, `--enc-key`/`-enck`, `--dump-header`/`--dump`/`-dump`, `--header-version`/`-hv`, `--no-keys`/`-nk`.
+
 ### Sign a Firmware Image
 
 Generate an ECDSA key:
