@@ -168,6 +168,12 @@ enum STM32HeaderVersion {
     STM32_HEADER_V2 = 2, // STM32MP13x lines and STM32MP2 series
 };
 
+enum STM32HeaderVersionMinor {
+    STM32_HEADER_MINOR_V0 = 0, // STM32MP13x lines
+    STM32_HEADER_MINOR_V2 = 2, // STM32MP23x lines and STM32MP25x lines
+    STM32_HEADER_MINOR_V3 = 3, // STM32MP21x lines
+};
+
 // Validate the common header fields and return the header major version,
 // or -1 if the image is too short or does not carry the STM32 magic.
 int get_stm32_header_version(const std::vector<unsigned char>& image) {
@@ -183,6 +189,14 @@ int get_stm32_header_version(const std::vector<unsigned char>& image) {
         return -1;
     }
     return (common.hdr_version >> 16) & 0xFF;
+}
+
+// Return the header minor version. The caller must validate the STM32 header first.
+// The header is usually validated through get_stm32_header_version beforehand already.
+int get_stm32_header_minor_version(const std::vector<unsigned char>& image) {
+    STM32HeaderCommon common;
+    std::memcpy(&common, image.data(), sizeof(common));
+    return (common.hdr_version >> 8) & 0xFF;
 }
 
 STM32HeaderV1 unpack_stm32_header_v1(const std::vector<unsigned char>& image) {
@@ -665,9 +679,25 @@ int sign_stm32_image(std::vector<unsigned char>& image, const char* key_desc, co
                 std::cout << "STM32 header v1 (STM32MP15x lines)" << std::endl;
             }
             return sign_stm32_image_v1(image, key_desc, passphrase);
-        case STM32_HEADER_V2:
-            std::cerr << "STM32 header v2 (STM32MP13x lines and STM32MP2 series) is not supported yet" << std::endl;
-            return -1;
+        case STM32_HEADER_V2: {
+            int hdr_minor_version = get_stm32_header_minor_version(image);
+            switch (hdr_minor_version) {
+                case STM32_HEADER_MINOR_V0:
+                    std::cerr << "STM32 header v2.0 (STM32MP13x lines) is not supported yet" << std::endl;
+                    return -1;
+                case STM32_HEADER_MINOR_V2:
+                    std::cerr << "STM32 header v2.2 (STM32MP23x lines and STM32MP25x lines) is not supported yet" << std::endl;
+                    return -1;
+                case STM32_HEADER_MINOR_V3:
+                    std::cerr << "STM32 header v2.3 (STM32MP21x lines) is not supported yet" << std::endl;
+                    return -1;
+                case -1:
+                    return -1;
+                default:
+                    std::cerr << "Unknown STM32 header v2 minor version: " << hdr_minor_version << std::endl;
+                    return -1;
+            }
+        }
         case -1:
             return -1;
         default:
