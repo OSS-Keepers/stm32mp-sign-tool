@@ -86,5 +86,13 @@ PUBLIC_KEY_URI="pkcs11:object=testkeyECp256V22;type=public"
     -K "$PUBLIC_KEY_URI" -K "$PUBLIC_KEY_URI" -x 0 \
     -i image_v2_2.stm32 -o image_v2_2.stm32.signed -h hash_v2_2.bin
 
+python3 -c "
+import hashlib
+image = open('image_v2_2.stm32.signed', 'rb').read()
+expected = hashlib.sha256(image[212:468]).digest()
+actual = open('hash_v2_2.bin', 'rb').read()
+assert actual == expected
+"
+
 # Skip for the moment test pkcs11 sign with (brainpoolP256t1)
 # will be fixed in later releases: https://github.com/OpenSC/OpenSC/pull/3601

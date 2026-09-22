@@ -4,6 +4,7 @@
 
 #include "logger.hpp"
 
+#include <array>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -363,6 +364,78 @@ int OpenSslKeys::hashPubkey(const std::string& keyDesc, const std::optional<std:
         return -1;
     }
     output.write((const char*)phash.data(), static_cast<std::streamsize>(phash.size()));
+    output.close();
+
+    return 0;
+}
+
+int OpenSslKeys::hashPublicKeyTable(
+    const std::vector<std::string>& publicKeyDescriptors,
+    const std::string& outputFile,
+    const Logger& logger) {
+    constexpr size_t publicKeyCount = 8;
+    if (publicKeyDescriptors.size() != publicKeyCount || outputFile.empty()) {
+        std::cerr << "Invalid arguments" << std::endl;
+        return -1;
+    }
+
+    std::array<unsigned char, publicKeyCount * SHA256_DIGEST_LENGTH> publicKeyHashes{};
+    for (size_t index = 0; index < publicKeyCount; ++index) {
+        EVP_PKEY* rawKey = nullptr;
+        if (loadPublicKey(publicKeyDescriptors[index], &rawKey) != 0) {
+            std::cerr << "Failed to load public key: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+        EvpPkeyPtr key(rawKey);
+
+        const std::vector<unsigned char> publicKey = getRawPubkey(key.get());
+        if (publicKey.size() != 64) {
+            std::cerr << "Invalid public key size: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+
+        const int keyAlgorithm = getKeyAlgorithm(key.get());
+        if (keyAlgorithm < 0) {
+            return -1;
+        }
+        const uint32_t algorithm = static_cast<uint32_t>(keyAlgorithm);
+
+        std::array<unsigned char, sizeof(uint32_t) + 64> hashInput{};
+        hashInput[0] = static_cast<unsigned char>(algorithm & 0xffU);
+        hashInput[1] = static_cast<unsigned char>((algorithm >> 8U) & 0xffU);
+        hashInput[2] = static_cast<unsigned char>((algorithm >> 16U) & 0xffU);
+        hashInput[3] = static_cast<unsigned char>((algorithm >> 24U) & 0xffU);
+        std::memcpy(hashInput.data() + sizeof(uint32_t),
+                    publicKey.data(),
+                    publicKey.size());
+
+        if (!SHA256(hashInput.data(),
+                    hashInput.size(),
+                    publicKeyHashes.data() + index * SHA256_DIGEST_LENGTH)) {
+            std::cerr << "Failed to hash public key: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+    }
+
+    std::vector<unsigned char> publicKeyTableHash(SHA256_DIGEST_LENGTH);
+    if (!SHA256(publicKeyHashes.data(),
+                publicKeyHashes.size(),
+                publicKeyTableHash.data())) {
+        std::cerr << "Failed to hash public key table" << std::endl;
+        return -1;
+    }
+    logger.printHex("Public key table hash (sha256)", publicKeyTableHash);
+
+    std::ofstream output(outputFile, std::ios::binary);
+    if (!output) {
+        std::cerr << "Failed to open output file: " << outputFile << std::endl;
+        return -1;
+    }
+    output.write(reinterpret_cast<const char*>(publicKeyTableHash.data()),
+                 static_cast<std::streamsize>(publicKeyTableHash.size()));
     output.close();
 
     return 0;
