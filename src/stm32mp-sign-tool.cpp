@@ -121,7 +121,7 @@ CliOptions parseCliOptions(int argc, char* argv[]) {
                     return options;
                 }
                 options.publicKeyDescriptors.emplace_back(optarg);
-                while (options.publicKeyDescriptors.size() < 8) {
+                while (options.publicKeyDescriptors.size() < OpenSslKeys::PUBLIC_KEY_COUNT) {
                     if (optind >= argc || argv[optind][0] == '\0' || argv[optind][0] == '-') {
                         std::cerr << "Option -K requires exactly eight public keys" << std::endl;
                         options.valid = false;
@@ -135,7 +135,7 @@ CliOptions parseCliOptions(int argc, char* argv[]) {
                 const char* end = optarg + std::strlen(optarg);
                 const auto result = std::from_chars(optarg, end, publicKeyIndex);
                 if (result.ec != std::errc{} || result.ptr != end || publicKeyIndex < 0
-                    || publicKeyIndex >= 8) {
+                    || publicKeyIndex >= static_cast<int>(OpenSslKeys::PUBLIC_KEY_COUNT)) {
                     std::cerr << "Public key index must be an integer from 0 to 7"
                               << std::endl;
                     options.valid = false;
@@ -177,7 +177,7 @@ CliOptions parseCliOptions(int argc, char* argv[]) {
     }
 
     if ((!options.publicKeyDescriptors.empty() || options.publicKeyIndex != -1)
-        && (options.publicKeyDescriptors.size() != 8 || options.publicKeyIndex == -1)) {
+        && (options.publicKeyDescriptors.size() != OpenSslKeys::PUBLIC_KEY_COUNT || options.publicKeyIndex == -1)) {
         std::cerr << "Options -K and -x must be used together: provide exactly eight "
                      "public keys and one public key index"
                   << std::endl;
