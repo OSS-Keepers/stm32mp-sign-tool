@@ -24,6 +24,7 @@ add_executable(
     src/stm32-image-format-factory.cpp
     src/stm32-image-format-v1.cpp
     src/stm32-image-format-v2.cpp
+    src/stm32-image-format-v2-2.cpp
 )
 
 # Headers live next to the sources
@@ -41,5 +42,17 @@ enable_testing()
 add_test(
     NAME stm32mp-sign-tool
     COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/stm32mp-sign-tool_test.sh
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:stm32mp-sign-tool>
+)
+
+add_test(
+    NAME stm32mp-sign-tool-v1
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/stm32mp-sign-tool-v1_test.sh
+    WORKING_DIRECTORY $<TARGET_FILE_DIR:stm32mp-sign-tool>
+)
+
+add_test(
+    NAME stm32mp-sign-tool-v2-2
+    COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/test/stm32mp-sign-tool-v2-2_test.sh
     WORKING_DIRECTORY $<TARGET_FILE_DIR:stm32mp-sign-tool>
 )

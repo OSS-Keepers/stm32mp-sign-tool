@@ -19,6 +19,7 @@
  * MA 02111-1307 USA
  */
 
+#include <charconv>
 #include <iostream>
 #include <fstream>
 #include <getopt.h>
@@ -31,6 +32,7 @@
 #include <openssl/crypto.h>
 
 #include "openssl-keys.hpp"
+#include "stm32-header-reader.hpp"
 #include "stm32mp-image-signer.hpp"
 #include "logger.hpp"
 
@@ -38,6 +40,8 @@ namespace {
 
 struct CliOptions {
     std::string keyDesc;
+    std::vector<std::string> publicKeyDescriptors;
+    int publicKeyIndex = -1;
     // Empty and absent are different things: an absent passphrase lets OpenSSL
     // prompt, an empty one is a real (empty) password. Do not collapse them.
     std::optional<std::string> passphrase;
@@ -89,7 +93,10 @@ private:
 };
 
 void usage(const std::string& argv0) {
-    std::cout << "Usage: " << argv0 << " -k key_desc [-p passphrase/pin] [-m module_path] [-v] [-i input_file] [-o output_file] [-h hash_file]" << std::endl;
+    std::cout << "Usage: " << argv0
+              << " -k key_desc [-K public_key_desc (repeat 8 times) -x public_key_index]"
+              << " [-p passphrase/pin] [-m module_path] [-v] [-i input_file]"
+              << " [-o output_file] [-h hash_file]" << std::endl;
 }
 
 CliOptions parseCliOptions(int argc, char* argv[]) {
@@ -102,12 +109,29 @@ CliOptions parseCliOptions(int argc, char* argv[]) {
     }
 
     int opt;
-    while ((opt = getopt(argc, argv, "k:p:h:vi:o:m:")) != -1) {
+    while ((opt = getopt(argc, argv, "k:K:x:p:h:vi:o:m:")) != -1) {
         switch (opt) {
             case 'k':
                 options.keyDesc = optarg;
                 options.keyDescArg = optarg;
                 break;
+            case 'K':
+                options.publicKeyDescriptors.emplace_back(optarg);
+                break;
+            case 'x': {
+                int publicKeyIndex = -1;
+                const char* end = optarg + std::strlen(optarg);
+                const auto result = std::from_chars(optarg, end, publicKeyIndex);
+                if (result.ec != std::errc{} || result.ptr != end || publicKeyIndex < 0
+                    || publicKeyIndex >= 8) {
+                    std::cerr << "Public key index must be an integer from 0 to 7"
+                              << std::endl;
+                    options.valid = false;
+                    return options;
+                }
+                options.publicKeyIndex = publicKeyIndex;
+                break;
+            }
             case 'p':
                 options.passphrase = optarg;
                 options.passphraseArg = optarg;
@@ -132,6 +156,14 @@ CliOptions parseCliOptions(int argc, char* argv[]) {
                 options.valid = false;
                 return options;
         }
+    }
+
+    if ((!options.publicKeyDescriptors.empty() || options.publicKeyIndex != -1)
+        && (options.publicKeyDescriptors.size() != 8 || options.publicKeyIndex == -1)) {
+        std::cerr << "Options -K and -x must be used together: provide exactly eight "
+                     "public keys and one public key index"
+                  << std::endl;
+        options.valid = false;
     }
 
     return options;
@@ -176,14 +208,25 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    int headerVersion = -1;
+    int headerMinorVersion = -1;
     if (!options.inputFile.empty()) {
-        STM32MPImageSigner imageSigner(openSslKeys, logger);
+        STM32MPImageSigner imageSigner(openSslKeys,
+                                       logger,
+                                       options.publicKeyDescriptors,
+                                       options.publicKeyIndex);
         std::ifstream imageFile(options.inputFile, std::ios::binary);
         std::vector<unsigned char> image((std::istreambuf_iterator<char>(imageFile)), std::istreambuf_iterator<char>());
         imageFile.close();
 
         if (imageSigner.signImage(image, options.keyDesc, options.passphrase) != 0) {
             return -1;
+        }
+
+        STM32HeaderReader headerReader(image);
+        headerVersion = headerReader.getHeaderVersion();
+        if (headerVersion == STM32HeaderReader::STM32_HEADER_V2) {
+            headerMinorVersion = headerReader.getHeaderMinorVersion();
         }
 
         if (!options.outputFile.empty()) {
@@ -194,7 +237,20 @@ int main(int argc, char* argv[]) {
     }
 
     if (!options.outputHash.empty()) {
-        if (openSslKeys->hashPubkey(options.keyDesc, options.passphrase, options.outputHash, *logger) != 0) {
+        const bool isHeaderV2_2 =
+            (headerVersion == STM32HeaderReader::STM32_HEADER_V2
+             && headerMinorVersion == STM32HeaderReader::STM32_HEADER_MINOR_V2)
+            || (options.inputFile.empty() && !options.publicKeyDescriptors.empty());
+        const int hashStatus = isHeaderV2_2
+                                   ? openSslKeys->hashPublicKeyTable(
+                                         options.publicKeyDescriptors,
+                                         options.outputHash,
+                                         *logger)
+                                   : openSslKeys->hashPubkey(options.keyDesc,
+                                                            options.passphrase,
+                                                            options.outputHash,
+                                                            *logger);
+        if (hashStatus != 0) {
             return -1;
         }
     }

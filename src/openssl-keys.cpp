@@ -4,6 +4,7 @@
 
 #include "logger.hpp"
 
+#include <array>
 #include <cstring>
 #include <fstream>
 #include <iostream>
@@ -257,6 +258,81 @@ int OpenSslKeys::loadKey(const std::string& keyDesc, const std::optional<std::st
     return 0;
 }
 
+int OpenSslKeys::loadPublicKey(const std::string& keyDesc, EVP_PKEY** pkey) {
+    *pkey = nullptr;
+    if (keyDesc.empty()) {
+        std::cerr << "Invalid public key descriptor" << std::endl;
+        return -1;
+    }
+
+    if (keyDesc.rfind("pkcs11:", 0) == 0) {
+        if (!pkcs11Module.empty()) {
+            setenv("PKCS11_PROVIDER_MODULE", pkcs11Module.c_str(), 1);
+        }
+
+        if (!defaultProvider) {
+            defaultProvider.reset(OSSL_PROVIDER_load(nullptr, "default"));
+        }
+        if (!pkcs11Provider) {
+            pkcs11Provider.reset(OSSL_PROVIDER_load(nullptr, "pkcs11"));
+        }
+        if (!pkcs11Provider) {
+            std::cerr << "Failed to load PKCS#11 provider" << std::endl;
+            return -1;
+        }
+
+        OssStoreCtxPtr store(
+            OSSL_STORE_open(keyDesc.c_str(), nullptr, nullptr, nullptr, nullptr));
+        if (!store) {
+            std::cerr << "Failed to open PKCS#11 store: " << keyDesc << std::endl;
+            return -1;
+        }
+
+        EvpPkeyPtr loadedPkey;
+        while (!OSSL_STORE_eof(store.get())) {
+            OssStoreInfoPtr info(OSSL_STORE_load(store.get()));
+            if (!info) {
+                if (OSSL_STORE_error(store.get())) {
+                    continue;
+                }
+                break;
+            }
+
+            if (OSSL_STORE_INFO_get_type(info.get()) == OSSL_STORE_INFO_PUBKEY) {
+                loadedPkey.reset(OSSL_STORE_INFO_get1_PUBKEY(info.get()));
+                break;
+            }
+            if (OSSL_STORE_INFO_get_type(info.get()) == OSSL_STORE_INFO_PKEY) {
+                loadedPkey.reset(OSSL_STORE_INFO_get1_PKEY(info.get()));
+                break;
+            }
+        }
+
+        if (!loadedPkey) {
+            std::cerr << "Failed to load public key from PKCS#11: " << keyDesc
+                      << std::endl;
+            return -1;
+        }
+        *pkey = loadedPkey.release();
+    }
+    else {
+        FilePtr keyFp(fopen(keyDesc.c_str(), "r"));
+        if (!keyFp) {
+            std::cerr << "Failed to open public key file" << std::endl;
+            return -1;
+        }
+
+        EvpPkeyPtr loadedPkey(PEM_read_PUBKEY(keyFp.get(), nullptr, nullptr, nullptr));
+        if (!loadedPkey) {
+            std::cerr << "Failed to read public key from file" << std::endl;
+            return -1;
+        }
+        *pkey = loadedPkey.release();
+    }
+
+    return 0;
+}
+
 int OpenSslKeys::hashPubkey(const std::string& keyDesc, const std::optional<std::string>& passphrase, const std::string& outputFile, const Logger& logger) {
     if (keyDesc.empty() || outputFile.empty()) {
         std::cerr << "Invalid arguments" << std::endl;
@@ -288,6 +364,78 @@ int OpenSslKeys::hashPubkey(const std::string& keyDesc, const std::optional<std:
         return -1;
     }
     output.write((const char*)phash.data(), static_cast<std::streamsize>(phash.size()));
+    output.close();
+
+    return 0;
+}
+
+int OpenSslKeys::hashPublicKeyTable(
+    const std::vector<std::string>& publicKeyDescriptors,
+    const std::string& outputFile,
+    const Logger& logger) {
+    constexpr size_t publicKeyCount = 8;
+    if (publicKeyDescriptors.size() != publicKeyCount || outputFile.empty()) {
+        std::cerr << "Invalid arguments" << std::endl;
+        return -1;
+    }
+
+    std::array<unsigned char, publicKeyCount * SHA256_DIGEST_LENGTH> publicKeyHashes{};
+    for (size_t index = 0; index < publicKeyCount; ++index) {
+        EVP_PKEY* rawKey = nullptr;
+        if (loadPublicKey(publicKeyDescriptors[index], &rawKey) != 0) {
+            std::cerr << "Failed to load public key: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+        EvpPkeyPtr key(rawKey);
+
+        const std::vector<unsigned char> publicKey = getRawPubkey(key.get());
+        if (publicKey.size() != 64) {
+            std::cerr << "Invalid public key size: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+
+        const int keyAlgorithm = getKeyAlgorithm(key.get());
+        if (keyAlgorithm < 0) {
+            return -1;
+        }
+        const uint32_t algorithm = static_cast<uint32_t>(keyAlgorithm);
+
+        std::array<unsigned char, sizeof(uint32_t) + 64> hashInput{};
+        hashInput[0] = static_cast<unsigned char>(algorithm & 0xffU);
+        hashInput[1] = static_cast<unsigned char>((algorithm >> 8U) & 0xffU);
+        hashInput[2] = static_cast<unsigned char>((algorithm >> 16U) & 0xffU);
+        hashInput[3] = static_cast<unsigned char>((algorithm >> 24U) & 0xffU);
+        std::memcpy(hashInput.data() + sizeof(uint32_t),
+                    publicKey.data(),
+                    publicKey.size());
+
+        if (!SHA256(hashInput.data(),
+                    hashInput.size(),
+                    publicKeyHashes.data() + index * SHA256_DIGEST_LENGTH)) {
+            std::cerr << "Failed to hash public key: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+    }
+
+    std::vector<unsigned char> publicKeyTableHash(SHA256_DIGEST_LENGTH);
+    if (!SHA256(publicKeyHashes.data(),
+                publicKeyHashes.size(),
+                publicKeyTableHash.data())) {
+        std::cerr << "Failed to hash public key table" << std::endl;
+        return -1;
+    }
+    logger.printHex("Public key table hash (sha256)", publicKeyTableHash);
+
+    std::ofstream output(outputFile, std::ios::binary);
+    if (!output) {
+        std::cerr << "Failed to open output file: " << outputFile << std::endl;
+        return -1;
+    }
+    output.write(reinterpret_cast<const char*>(publicKeyTableHash.data()),
+                 static_cast<std::streamsize>(publicKeyTableHash.size()));
     output.close();
 
     return 0;
