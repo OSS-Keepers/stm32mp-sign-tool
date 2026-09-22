@@ -91,9 +91,7 @@ private:
 
     STM32HeaderV2_2 unpackHeader(const std::vector<unsigned char>& image);
     void repackHeader(std::vector<unsigned char>& image, const STM32HeaderV2_2& header);
-    int prepareAuthenticationExtension(std::vector<unsigned char>& image,
-                                       const std::string& keyDesc,
-                                       const std::optional<std::string>& passphrase);
+    int prepareAuthenticationExtension(STM32HeaderV2_2& header);
 
     std::shared_ptr<OpenSslKeys> openSslKeys;
     std::shared_ptr<Logger> logger;

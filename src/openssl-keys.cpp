@@ -257,6 +257,81 @@ int OpenSslKeys::loadKey(const std::string& keyDesc, const std::optional<std::st
     return 0;
 }
 
+int OpenSslKeys::loadPublicKey(const std::string& keyDesc, EVP_PKEY** pkey) {
+    *pkey = nullptr;
+    if (keyDesc.empty()) {
+        std::cerr << "Invalid public key descriptor" << std::endl;
+        return -1;
+    }
+
+    if (keyDesc.rfind("pkcs11:", 0) == 0) {
+        if (!pkcs11Module.empty()) {
+            setenv("PKCS11_PROVIDER_MODULE", pkcs11Module.c_str(), 1);
+        }
+
+        if (!defaultProvider) {
+            defaultProvider.reset(OSSL_PROVIDER_load(nullptr, "default"));
+        }
+        if (!pkcs11Provider) {
+            pkcs11Provider.reset(OSSL_PROVIDER_load(nullptr, "pkcs11"));
+        }
+        if (!pkcs11Provider) {
+            std::cerr << "Failed to load PKCS#11 provider" << std::endl;
+            return -1;
+        }
+
+        OssStoreCtxPtr store(
+            OSSL_STORE_open(keyDesc.c_str(), nullptr, nullptr, nullptr, nullptr));
+        if (!store) {
+            std::cerr << "Failed to open PKCS#11 store: " << keyDesc << std::endl;
+            return -1;
+        }
+
+        EvpPkeyPtr loadedPkey;
+        while (!OSSL_STORE_eof(store.get())) {
+            OssStoreInfoPtr info(OSSL_STORE_load(store.get()));
+            if (!info) {
+                if (OSSL_STORE_error(store.get())) {
+                    continue;
+                }
+                break;
+            }
+
+            if (OSSL_STORE_INFO_get_type(info.get()) == OSSL_STORE_INFO_PUBKEY) {
+                loadedPkey.reset(OSSL_STORE_INFO_get1_PUBKEY(info.get()));
+                break;
+            }
+            if (OSSL_STORE_INFO_get_type(info.get()) == OSSL_STORE_INFO_PKEY) {
+                loadedPkey.reset(OSSL_STORE_INFO_get1_PKEY(info.get()));
+                break;
+            }
+        }
+
+        if (!loadedPkey) {
+            std::cerr << "Failed to load public key from PKCS#11: " << keyDesc
+                      << std::endl;
+            return -1;
+        }
+        *pkey = loadedPkey.release();
+    }
+    else {
+        FilePtr keyFp(fopen(keyDesc.c_str(), "r"));
+        if (!keyFp) {
+            std::cerr << "Failed to open public key file" << std::endl;
+            return -1;
+        }
+
+        EvpPkeyPtr loadedPkey(PEM_read_PUBKEY(keyFp.get(), nullptr, nullptr, nullptr));
+        if (!loadedPkey) {
+            std::cerr << "Failed to read public key from file" << std::endl;
+            return -1;
+        }
+        *pkey = loadedPkey.release();
+    }
+
+    return 0;
+}
+
 int OpenSslKeys::hashPubkey(const std::string& keyDesc, const std::optional<std::string>& passphrase, const std::string& outputFile, const Logger& logger) {
     if (keyDesc.empty() || outputFile.empty()) {
         std::cerr << "Invalid arguments" << std::endl;

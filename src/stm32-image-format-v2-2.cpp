@@ -2,7 +2,12 @@
 
 #include "stm32-image-format-v2-2.hpp"
 
+#include "openssl-keys.hpp"
+
+#include <array>
 #include <cstring>
+#include <iostream>
+#include <openssl/sha.h>
 #include <stdexcept>
 #include <utility>
 
@@ -99,9 +104,68 @@ int STM32ImageFormatV2_2::sign(std::vector<unsigned char>&,
     throw std::runtime_error("STM32 header v2.2 signing is not implemented yet");
 }
 
-int STM32ImageFormatV2_2::prepareAuthenticationExtension(
-    std::vector<unsigned char>&,
-    const std::string&,
-    const std::optional<std::string>&) {
-    throw std::runtime_error("STM32 header v2.2 authentication extension preparation is not implemented yet");
+int STM32ImageFormatV2_2::prepareAuthenticationExtension(STM32HeaderV2_2& header) {
+    STM32AuthenticationExtensionV2_2 authenticationExtension{};
+
+    const unsigned char extensionType[4] = {'S', 'T', 0x00, 0x02};
+    std::memcpy(&authenticationExtension.extension_type,
+                extensionType,
+                sizeof(extensionType));
+    authenticationExtension.extension_length =
+        static_cast<uint32_t>(sizeof(authenticationExtension));
+    authenticationExtension.public_key_index = publicKeyIndex;
+    authenticationExtension.public_key_count = static_cast<uint32_t>(PUBLIC_KEY_COUNT);
+
+    for (size_t index = 0; index < PUBLIC_KEY_COUNT; ++index) {
+        EVP_PKEY* rawKey = nullptr;
+        if (openSslKeys->loadPublicKey(publicKeyDescriptors[index], &rawKey) != 0) {
+            std::cerr << "Failed to load public key: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+        EvpPkeyPtr key(rawKey);
+
+        const std::vector<unsigned char> publicKey = openSslKeys->getRawPubkey(key.get());
+        if (publicKey.size() != sizeof(authenticationExtension.ecdsa_public_key)) {
+            std::cerr << "Invalid public key size: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+
+        const int keyAlgorithm = openSslKeys->getKeyAlgorithm(key.get());
+        if (keyAlgorithm < 0) {
+            return -1;
+        }
+        const uint32_t algorithm = static_cast<uint32_t>(keyAlgorithm);
+
+        std::array<unsigned char,
+                   sizeof(uint32_t) + sizeof(authenticationExtension.ecdsa_public_key)>
+            hashInput{};
+        hashInput[0] = static_cast<unsigned char>(algorithm & 0xffU);
+        hashInput[1] = static_cast<unsigned char>((algorithm >> 8U) & 0xffU);
+        hashInput[2] = static_cast<unsigned char>((algorithm >> 16U) & 0xffU);
+        hashInput[3] = static_cast<unsigned char>((algorithm >> 24U) & 0xffU);
+        std::memcpy(hashInput.data() + sizeof(uint32_t),
+                    publicKey.data(),
+                    publicKey.size());
+
+        if (!SHA256(hashInput.data(),
+                    hashInput.size(),
+                    authenticationExtension.public_key_hashes[index])) {
+            std::cerr << "Failed to hash public key: " << publicKeyDescriptors[index]
+                      << std::endl;
+            return -1;
+        }
+
+        if (index == static_cast<size_t>(publicKeyIndex)) {
+            authenticationExtension.ecdsa_algorithm = algorithm;
+            std::memcpy(authenticationExtension.ecdsa_public_key,
+                        publicKey.data(),
+                        publicKey.size());
+        }
+    }
+
+    header.authentication_extension = authenticationExtension;
+    header.base_header.option_flags |= 1U;
+    return 0;
 }
