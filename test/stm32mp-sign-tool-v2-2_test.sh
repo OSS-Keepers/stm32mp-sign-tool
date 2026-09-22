@@ -99,6 +99,13 @@ PUBLIC_KEY_URI="pkcs11:object=testkeyECp256V22;type=public"
     -K "pkcs11:object=testkeyECp256V22-6;type=public" -K "pkcs11:object=testkeyECp256V22-7;type=public" -x 0 \
     -i image_v2_2.stm32 -o image_v2_2.stm32.signed -h hash_v2_2.bin
 
+python3 -c "
+import hashlib
+image = open('image_v2_2.stm32.signed', 'rb').read()
+expected = hashlib.sha256(image[212:468]).digest()
+actual = open('hash_v2_2.bin', 'rb').read()
+assert actual == expected
+"
 
 # Skip for the moment test pkcs11 sign with (brainpoolP256t1)
 # will be fixed in later releases: https://github.com/OpenSC/OpenSC/pull/3601
@@ -195,6 +202,33 @@ with tempfile.TemporaryDirectory(prefix="stm32mp-duplicate-keys-") as directory:
         assert result.returncode != 0
         assert "Duplicate public keys at indices 0 and 7" in result.stderr, result.stderr
         assert not target.exists()
+
+    def export_hash(keys, target):
+        arguments = [sign_tool, "-k", str(private), "-m", os.environ["PKCS11_MODULE_PATH"]]
+        for key in keys:
+            arguments += ["-K", str(key)]
+        return run(arguments + ["-x", "0", "-h", str(target)])
+
+    hash_output = root / "table-hash.bin"
+    result = export_hash(public, hash_output)
+    assert result.returncode == 0, result.stderr
+    assert hash_output.read_bytes() == hashlib.sha256(data[212:468]).digest()
+    for duplicate in [public[0], copied, encoded]:
+        keys = public.copy()
+        keys[7] = duplicate
+        target = root / "rejected-hash.bin"
+        result = export_hash(keys, target)
+        assert result.returncode != 0
+        assert "Duplicate public keys at indices 0 and 7" in result.stderr, result.stderr
+        assert not target.exists()
+
+    # Different PKCS#11 URIs resolving to the same token public key.
+    token_keys = ["pkcs11:object=testkeyECp256V22;type=public"]
+    token_keys += [f"pkcs11:object=testkeyECp256V22-{index};type=public" for index in range(1, 8)]
+    token_keys[7] = "pkcs11:object=testkeyECp256V22;type=public;id=%01"
+    result = export_hash(token_keys, root / "rejected-token-hash.bin")
+    assert result.returncode != 0
+    assert "Duplicate public keys at indices 0 and 7" in result.stderr, result.stderr
 
     def resign(image):
         image = bytearray(image)
