@@ -41,6 +41,9 @@ openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:brainpoolP256t1 -aes-25
 "$SIGN_TOOL" -v -k brainpool_private_key.pem -p "pa33w0rd" -i image.stm32 -o image.stm32.signed
 
 # test pkcs11 key
+# Use the SoftHSM shutdown workaround for local CTest and direct script runs.
+# An explicit OPENSSL_CONF can override it when testing another configuration.
+export OPENSSL_CONF="${OPENSSL_CONF:-$SCRIPT_DIR/openssl-softhsm.cnf}"
 export PKCS11_MODULE_PATH=/usr/lib/softhsm/libsofthsm2.so
 export PIN="12345"
 export SO_PIN="1234"

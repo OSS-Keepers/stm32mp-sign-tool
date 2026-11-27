@@ -1,0 +1,17 @@
+# SoftHSM test workaround for shutdown crashes during OpenSSL cleanup.
+# Keep this configuration scoped to tests, not other HSMs or production use.
+openssl_conf = openssl_init
+
+[openssl_init]
+providers = providers
+
+[providers]
+default = default_section
+pkcs11 = pkcs11_section
+
+[default_section]
+activate = 1
+
+[pkcs11_section]
+pkcs11-module-quirks = no-deinit
+activate = 1
